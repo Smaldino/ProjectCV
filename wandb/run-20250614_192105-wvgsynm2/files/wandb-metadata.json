@@ -1,0 +1,67 @@
+{
+  "os":  "Windows-11-10.0.26100-SP0",
+  "python":  "CPython 3.12.7",
+  "startedAt":  "2025-06-14T17:21:06.214806Z",
+  "args":  [
+    "--data_source",
+    "./data/cities/Bari/1",
+    "--data_target",
+    "./data/cities/Tokyo/1",
+    "--output_dir",
+    "./output",
+    "--interp",
+    "straight",
+    "--use_ema",
+    "--resolution",
+    "256",
+    "--train_batch_size",
+    "8",
+    "--max_train_steps",
+    "1000",
+    "--num_train_epochs",
+    "2",
+    "--checkpointing_steps",
+    "100",
+    "--learning_rate",
+    "2e-4",
+    "--random_flip"
+  ],
+  "program":  "C:\\Users\\Fabbro\\Documents\\Universita\\CasoStudio3\\rectified_flow\\pipelines\\train_unet_cifar.py",
+  "codePath":  "rectified_flow\\pipelines\\train_unet_cifar.py",
+  "git":  {
+    "remote":  "https://github.com/Smaldino/CaseStudyProject.git",
+    "commit":  "8ebd9aee3fe2d7cf9d040b030f82a78246a2a83c"
+  },
+  "email":  "fabriziosmaldino2112@gmail.com",
+  "root":  "C:\\Users\\Fabbro\\Documents\\Universita\\CasoStudio3",
+  "host":  "DESKTOP-OASC2B9",
+  "executable":  "C:\\Users\\Fabbro\\anaconda3\\python.exe",
+  "codePathLocal":  "rectified_flow\\pipelines\\train_unet_cifar.py",
+  "cpu_count":  6,
+  "cpu_count_logical":  12,
+  "gpu":  "NVIDIA GeForce RTX 3060",
+  "gpu_count":  1,
+  "disk":  {
+    "/":  {
+      "total":  "999324381184",
+      "used":  "556102225920"
+    }
+  },
+  "memory":  {
+    "total":  "17099853824"
+  },
+  "cpu":  {
+    "count":  6,
+    "countLogical":  12
+  },
+  "gpu_nvidia":  [
+    {
+      "name":  "NVIDIA GeForce RTX 3060",
+      "memoryTotal":  "12884901888",
+      "cudaCores":  3584,
+      "architecture":  "Ampere",
+      "uuid":  "GPU-2a8b80dd-d6bf-f1f6-3925-11d14dace923"
+    }
+  ],
+  "cudaVersion":  "12.6"
+}
