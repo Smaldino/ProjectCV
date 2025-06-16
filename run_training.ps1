@@ -12,4 +12,3 @@ python rectified_flow/pipelines/train_unet_cifar.py `
   --checkpointing_steps 10 `
   --learning_rate 2e-4 `
   --random_flip
-  

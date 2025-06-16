@@ -4,7 +4,7 @@ import numpy as np
 
 import matplotlib.pyplot as plt
 
-from rectified_flow.rectified_flow import RectifiedFlow
+from rectified_flow.RFlow import RectifiedFlow
 from rectified_flow.utils import set_seed, match_dim_with_data
 from typing import Callable
 

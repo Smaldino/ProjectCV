@@ -26,7 +26,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 from rectified_flow.models.dit import DiT, DiTConfig
-from rectified_flow.rectified_flow import RectifiedFlow
+from rectified_flow.RFlow import RectifiedFlow
 
 logger = get_logger(__name__)
 

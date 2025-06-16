@@ -1,6 +1,6 @@
 import torch
 from .base_sampler import Sampler
-from rectified_flow.rectified_flow import RectifiedFlow
+from rectified_flow.RFlow import RectifiedFlow
 from rectified_flow.flow_components.interpolation_solver import AffineInterp
 from typing import Callable
 

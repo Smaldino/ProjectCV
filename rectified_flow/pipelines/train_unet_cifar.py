@@ -20,7 +20,7 @@ from torchvision import transforms
 from tqdm.auto import tqdm
 
 from rectified_flow.models.unet import SongUNet, SongUNetConfig
-from rectified_flow.rectified_flow import RectifiedFlow
+from rectified_flow.RFlow import RectifiedFlow
 from rectified_flow.datasets.coupling_dataset import CouplingDataset
 from rectified_flow.datasets.coupling_dataset import coupling_collate_fn
 from rectified_flow.datasets.flat_image_dataset import FlatImageDataset
@@ -368,6 +368,7 @@ def parse_args():
 def main(args):
     # Clear GPU memory before training
     torch.cuda.empty_cache()
+    print("Using GPU:", torch.cuda.is_available())
 
     logging_dir = Path(args.output_dir, args.logging_dir)
 
