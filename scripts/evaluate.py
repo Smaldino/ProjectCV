@@ -56,9 +56,9 @@ def parse_args():
 
 
 def eval_fid(args):
-    fid_score = fid.compute_fid(
-        args.gt_img_dir, args.gen_img_dir, mode="clean", model_name=args.fid_model
-    )
+    
+    fid_score = fid.compute_fid(args.gt_img_dir, args.gen_img_dir, mode="clean", model_name=args.fid_model)
+
     print("FID Score: {:.4f}".format(fid_score))
 
 

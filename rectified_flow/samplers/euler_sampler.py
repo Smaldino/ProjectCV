@@ -30,4 +30,5 @@ class EulerSampler(Sampler):
         x_t = x_t.to(torch.float32)
         v_t = v_t.to(torch.float32)
         self.x_t = x_t + (t_next - t) * v_t
+        self.x_t = torch.clamp(self.x_t, -1, 1)
         self.x_t = self.x_t.to(dtype)
