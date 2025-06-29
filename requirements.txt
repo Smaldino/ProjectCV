@@ -17,3 +17,5 @@ torchvision>=0.20.0
 tqdm
 ipykernel
 nbformat>=4.2.0
+tensorboard
+clean-fid

@@ -162,7 +162,7 @@ cython_debug/
 
 # Custom ignores
 data/
-
+output/
 
 
 # PyCharm
