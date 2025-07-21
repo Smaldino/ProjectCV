@@ -177,13 +177,7 @@ class RectifiedFlow:
         x_t, dot_x_t = self.interp.forward(x_0, x_1, t, detach=True)
         return x_t, dot_x_t
 
-    def get_velocity(
-        self,
-        x_t: torch.Tensor | float | List[float],
-        t: torch.Tensor,
-        x_cond: torch.Tensor = None,
-        **kwargs,
-    ):
+    def get_velocity(self, x_t: torch.Tensor | float | List[float], t: torch.Tensor, x_cond: torch.Tensor = None, **kwargs):
         r"""
         This method calculates the velocity of the flow `v_t` at a given state `X_t` and time `t` using the provided model.
 
@@ -243,7 +237,7 @@ class RectifiedFlow:
 
         x_t, dot_x_t = self.get_interpolation(x_0, x_1, t)
         v_t = self.get_velocity(x_t, t, x_cond=x_0)
-        time_weights = self.train_time_weight(t)
+        time_weights = self.train_time_weight(t) 
 
         # Compute loss
         loss = self.criterion(v_t=v_t, dot_x_t=dot_x_t, x_t=x_t, t=t, time_weights=time_weights)

@@ -1,7 +1,8 @@
-import argparse
-import logging
-import math
 import os
+import math
+import logging
+import argparse
+
 import shutil
 from pathlib import Path
 
@@ -110,7 +111,7 @@ class EMAModel:
             self.ema.to(device=net_device, dtype=torch.float32)
             print(f"EMA weights loaded from {output_model_file}")
         else:
-            raise FileNotFoundError(f"No EMA weights found at {output_model_file}")
+            raise FileNotFoundError(f"No EMA weights found at {output_model_file}") #Added error handling for missing EMA weights
     
 # Image transform
 def get_transform(resolution):
@@ -136,7 +137,7 @@ def parse_args():
     parser.add_argument("--validation_epochs", type=int, default=5, help="Run validation every X epochs.")
     parser.add_argument("--checkpointing_steps", type=int, default=10000, help="Save a checkpoint every X steps.")
     parser.add_argument("--checkpoints_total_limit", type=int, default=None, help="Maximum number of checkpoints to keep.")
-    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="If non-null, resume training from this checkpoint.")
+    parser.add_argument("--resume_from_checkpoint", type=str, default=None, help="If non-null, resume the specified training istance.")
     parser.add_argument("--resolution", type=int, default=256, help="Resolution to train at.")
 
     # Training config
@@ -161,7 +162,7 @@ def parse_args():
     parser.add_argument("--is_independent_coupling", action="store_true")
     parser.add_argument("--train_time_distribution", type=str, default="uniform")
     parser.add_argument("--train_time_weight", type=str, default="uniform")
-    parser.add_argument("--criterion", type=str, default="mse")
+    parser.add_argument("--criterion", type=str, default="mse", help="Criterion for the rectified flow. Choose between ['mse', 'l1', 'lpips'].")
 
     # Misc
     parser.add_argument("--random_flip", action="store_true", help="Random horizontal flip")
@@ -186,14 +187,38 @@ def main(args):
 
     # Setup accelerator
     kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
-    accelerator_project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=args.logging_dir)
+    project_config = ProjectConfiguration(project_dir=args.output_dir, logging_dir=args.logging_dir)
+
     accelerator = Accelerator(
         log_with=args.report_to,
         mixed_precision=args.mixed_precision,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        project_config=accelerator_project_config,
+        project_config=project_config,
         kwargs_handlers=[kwargs]
     )
+
+    # Custom save/load hooks 
+    def save_model_hook(models, weights, output_dir):
+        if accelerator.is_main_process:
+            for i, model in enumerate(models):
+                if isinstance(accelerator.unwrap_model(model), SongUNet):
+                    unwrap_model = accelerator.unwrap_model(model)
+                    unwrap_model.save_pretrained(output_dir, filename="unet")
+                else:
+                    raise ValueError(f"Wrong model supplied: {type(model)=}.")
+        weights.pop()
+
+    def load_model_hook(models, input_dir):
+        for _ in range(len(models)):
+            model = models.pop()
+            if isinstance(accelerator.unwrap_model(model), SongUNet):
+                load_model = SongUNet.from_pretrained(input_dir, filename="unet")
+                model.load_state_dict(load_model.state_dict())
+            else:
+                raise ValueError(f"Wrong model supplied: {type(model)=}.")
+
+    accelerator.register_save_state_pre_hook(save_model_hook)
+    accelerator.register_load_state_pre_hook(load_model_hook) 
 
     # Set weight dtype based on mixed precision
     weight_dtype = torch.float32
@@ -210,40 +235,12 @@ def main(args):
     )
     logger.info(accelerator.state, main_process_only=False)
 
-    # Output directory setup
-    if accelerator.is_main_process:
-        if args.output_dir is not None:
-            os.makedirs(args.output_dir, exist_ok=True)
-
-            existing_runs = [d for d in os.listdir(args.output_dir) if d.startswith("training_") and os.path.isdir(os.path.join(args.output_dir, d))]
-            if existing_runs:
-                nums = [int(d.split('_')[1]) for d in existing_runs]
-                next_run_number = max(nums) + 1
-            else:
-                next_run_number = 1
-
-            args.run_name = f"training_{next_run_number:03d}"
-            args.run_output_dir = os.path.join(args.output_dir, args.run_name)
-            args.logging_dir = os.path.join(args.run_output_dir, "logs")
-            os.makedirs(args.run_output_dir, exist_ok=False)
-            os.makedirs(args.logging_dir, exist_ok=True)
-        else:
-            args.run_output_dir = None
-    else:
-        args.run_output_dir = None
-    
-    if args.allow_tf32 and torch.cuda.is_available():
-        torch.backends.cuda.matmul.allow_tf32 = True
-
     # Seed and device
     if args.seed is not None:
         set_seed(args.seed)
 
-    # Define transform
-    transform = get_transform(args.resolution)
-
     # Prepare model
-    logger.info("******  Preparing models  ******")
+    logger.info("******  Preparing Model  ******")
     model_config = SongUNetConfig(
         img_resolution=args.resolution,
         in_channels=3,
@@ -261,11 +258,21 @@ def main(args):
 
     # Prepare datasets
     logger.info("******  Preparing datasets  ******")
+    transform = get_transform(args.resolution)
     dataset_A = FlatImageDataset(root=args.data_source, transform=transform, ext="jpg")
     dataset_B = FlatImageDataset(root=args.data_target, transform=transform, ext="jpg")
 
     train_dataloader_A = DataLoader(dataset_A, batch_size=args.train_batch_size, shuffle=True, num_workers=args.num_workers)
     train_dataloader_B = DataLoader(dataset_B, batch_size=args.train_batch_size, shuffle=True, num_workers=args.num_workers)
+    
+    # Scale learning rate
+    if args.scale_lr:
+        args.learning_rate = (
+            args.learning_rate
+            * args.gradient_accumulation_steps
+            * args.train_batch_size
+            * accelerator.num_processes
+        )
 
     # Optimizer and scheduler
     model_params_with_lr = {"params": model.parameters(), "lr": args.learning_rate}
@@ -276,53 +283,16 @@ def main(args):
 
     lr_scheduler = get_scheduler(
         args.lr_scheduler, optimizer=optimizer,
-        num_warmup_steps=args.lr_warmup_steps,
-        num_training_steps=args.max_train_steps
+        num_warmup_steps=args.lr_warmup_steps * accelerator.num_processes,
+        num_training_steps=args.max_train_steps * accelerator.num_processes,
+        num_cycles=args.lr_num_cycles,
+        power=args.lr_power
     )
-
-    # Scale learning rate if necessary
-    if args.scale_lr:
-        args.learning_rate = (
-            args.learning_rate
-            * args.gradient_accumulation_steps
-            * args.train_batch_size
-            * accelerator.num_processes
-        )
-    
-    # Custom save/load hooks 
-    def save_model_hook(models, weights, output_dir):
-        if accelerator.is_main_process:
-            for i, model in enumerate(models):
-                if isinstance(accelerator.unwrap_model(model), SongUNet):
-                    unwrap_model = accelerator.unwrap_model(model)
-                    unwrap_model.save_pretrained(output_dir, filename="unet")
-                else:
-                    raise ValueError(f"Wrong model supplied: {type(model)=}.")
-            for model in models:
-                if isinstance(accelerator.unwrap_model(model), SongUNet):
-                    unwrap_model = accelerator.unwrap_model(model)
-                    unwrap_model.save_pretrained(output_dir, filename="unet")
-                else:
-                    raise ValueError(f"Wrong model supplied: {type(model)=}.")
-        weights.pop()
-
-    def load_model_hook(models, input_dir):
-        for _ in range(len(models)):
-            model = models.pop()
-            print(f"Loading model {type(model)} from {input_dir}")
-            if isinstance(accelerator.unwrap_model(model), SongUNet):
-                load_model = SongUNet.from_pretrained(input_dir, filename="unet")
-                model.load_state_dict(load_model.state_dict())
-            else:
-                raise ValueError(f"Wrong model supplied: {type(model)=}.")
-
-    accelerator.register_save_state_pre_hook(save_model_hook)
-    accelerator.register_load_state_pre_hook(load_model_hook)
 
     # Prepare with accelerator
     models_to_prepare = [model]
     if args.use_ema:
-        models_to_prepare += [model_ema]
+        models_to_prepare.append(model_ema)
 
     if args.use_ema:
         model, model_ema, optimizer, train_dataloader_A, train_dataloader_B, lr_scheduler = accelerator.prepare(
@@ -347,54 +317,100 @@ def main(args):
         dtype=torch.float32
     )
 
-    # Calculate number of update steps per epoch and possibly override max_train_steps
+    # Setup output directories
+    global_step = 0
+    first_epoch = 0
+    initial_global_step = 0
+ 
+    if accelerator.is_main_process:
+        os.makedirs(args.output_dir, exist_ok=True)
+
+        # Find existing runs
+        existing_runs = [d for d in os.listdir(args.output_dir) if d.startswith("training_") and os.path.isdir(os.path.join(args.output_dir, d))]
+        existing_runs.sort(key=lambda x: int(x.split("_")[1]))
+
+        # If resuming form a specific run
+        if args.resume_from_checkpoint:
+            if args.resume_from_checkpoint == "latest":
+                args.resume_from_checkpoint = existing_runs[-1] if len(existing_runs) > 0 else None
+
+            if args.resume_from_checkpoint and args.resume_from_checkpoint.startswith("training_"):
+                resume_run_path = os.path.join(args.output_dir, args.resume_from_checkpoint)
+
+                if os.path.isdir(resume_run_path):
+                    # Find checkpoints inside this run
+                    dirs = os.listdir(resume_run_path)
+                    dirs = [d for d in dirs if d.startswith("checkpoint")]
+                    dirs.sort(key=lambda x: int(x.split("-")[1]))
+                    if len(dirs) > 0:
+                        path = dirs[-1]  # Latest checkpoint
+                        args.run_output_dir = resume_run_path
+                        args.run_name = args.resume_from_checkpoint
+                        checkpoint_path = os.path.join(resume_run_path, path)
+                        logger.info(f"Resuming from {checkpoint_path}")
+                        accelerator.load_state(checkpoint_path)
+
+                        if args.use_ema:
+                            try:
+                                model_ema.load_pretrained(checkpoint_path, filename="unet")
+                                logger.info("Loaded EMA weights")
+                            except Exception as e:
+                                logger.warning(f"Could not load EMA weights: {e}")
+
+                        global_step = int(path.split("-")[1])
+                        first_epoch = global_step // math.ceil(len(train_dataloader_A) / args.gradient_accumulation_steps)
+                        initial_global_step = global_step
+                    else:
+                        logger.info("No valid checkpoints found in the specified run. Starting fresh.")
+                        args.resume_from_checkpoint = None
+                        args.run_name = f"training_{1:03d}"
+                        args.run_output_dir = os.path.join(args.output_dir, args.run_name)
+                        os.makedirs(args.run_output_dir, exist_ok=False)
+                else:
+                    logger.warning(f"Specified training run '{args.resume_from_checkpoint}' does not exist. Starting new run.")
+                    args.resume_from_checkpoint = None
+                    next_run_number = 1 if not existing_runs else max(int(d.split('_')[1]) for d in existing_runs) + 1
+                    args.run_name = f"training_{next_run_number:03d}"
+                    args.run_output_dir = os.path.join(args.output_dir, args.run_name)
+                    os.makedirs(args.run_output_dir, exist_ok=False)
+            else:
+                logger.warning(f"Invalid resume value: {args.resume_from_checkpoint}. Starting new run.")
+                args.resume_from_checkpoint = None
+                next_run_number = 1 if not existing_runs else existing_runs[-1].split("_")[1] + 1
+                args.run_name = f"training_{next_run_number:03d}"
+                args.run_output_dir = os.path.join(args.output_dir, args.run_name)
+                os.makedirs(args.run_output_dir, exist_ok=False)
+
+        else:
+            # No resume flag → create new run
+            next_run_number = 1
+            if existing_runs:
+                nums = [int(d.split('_')[1]) for d in existing_runs]
+                next_run_number = max(nums) + 1
+            args.run_name = f"training_{next_run_number:03d}"
+            args.run_output_dir = os.path.join(args.output_dir, args.run_name)
+            os.makedirs(args.run_output_dir, exist_ok=False)
+            logger.info(f"Created new training run: {args.run_name}")
+    else:
+        args.run_output_dir = None
+
+    accelerator.wait_for_everyone()
+
+    # Calculate steps per epoch 
     overrode_max_train_steps = False
     num_update_steps_per_epoch = math.ceil(len(train_dataloader_A) / args.gradient_accumulation_steps)
-
     if args.max_train_steps is None:
         if args.num_train_epochs is None:
             raise ValueError("Either num_train_epochs or max_train_steps must be provided.")
         args.max_train_steps = args.num_train_epochs * num_update_steps_per_epoch
         overrode_max_train_steps = True
-
-    # Recalculate number of training epochs
     args.num_train_epochs = math.ceil(args.max_train_steps / num_update_steps_per_epoch)
+    total_batch_size = (args.train_batch_size * accelerator.num_processes * args.gradient_accumulation_steps)
 
     if accelerator.is_main_process:
         tracker_name = "1rf-dit-cifar"
         accelerator.init_trackers(tracker_name, config=vars(args))
-
-    total_batch_size = (
-        args.train_batch_size
-        * accelerator.num_processes
-        * args.gradient_accumulation_steps
-    )
-
-    # Resume from checkpoint
-    global_step = 0
-    first_epoch = 0
-    initial_global_step = 0
-
-    if args.resume_from_checkpoint:
-        if args.resume_from_checkpoint != "latest":
-            path = os.path.basename(args.resume_from_checkpoint)
-        else:
-            dirs = os.listdir(args.output_dir)
-            dirs = [d for d in dirs if d.startswith("checkpoint")]
-            dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
-            path = dirs[-1] if len(dirs) > 0 else None
-
-        if path is None:
-            logger.info(f"Checkpoint '{args.resume_from_checkpoint}' does not exist. Starting new training run.")
-            args.resume_from_checkpoint = None
-        else:
-            logger.info(f"Resuming from checkpoint {path}")
-            accelerator.load_state(os.path.join(args.output_dir, path))
-            if args.use_ema:
-                model_ema.load_pretrained(os.path.join(args.output_dir, path), filename="unet")
-            global_step = int(path.split("-")[1])
-            initial_global_step = global_step
-            first_epoch = global_step // len(train_dataloader_A)
+        
 
     # Progress bar
     progress_bar = tqdm(range(0, args.max_train_steps), initial=initial_global_step,
@@ -428,7 +444,7 @@ def main(args):
         # Sample time
         t = rectified_flow.sample_train_time(x_A.shape[0])
 
-        # Compute loss A -> B
+        # Compute loss 
         if args.unpaired:
             loss_AB = rectified_flow.get_loss(x_0=x_A, x_1=x_B, t=t).mean()
         else:
@@ -487,9 +503,10 @@ def main(args):
                 model_ema.save_pretrained(save_path, filename="unet")
                 logger.info(f"Saved final EMA model to {save_path}")
 
+    # End training
     accelerator.end_training()
 
-
+# Run the main function
 if __name__ == "__main__":
     args = parse_args()
     main(args)

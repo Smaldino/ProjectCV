@@ -90,7 +90,7 @@ def load_model(model_path, resolution, device="cuda", use_ema=True):
     return model
 
 
-def transform_image_with_euler(rectified_flow, image_tensor, num_steps, x_cond=None):
+def transform_image_with_euler(rectified_flow, image_tensor, num_steps):
   with torch.no_grad():
         sampler = EulerSampler(rectified_flow=rectified_flow, num_steps=num_steps)
 
@@ -117,6 +117,8 @@ def transform_image_with_euler(rectified_flow, image_tensor, num_steps, x_cond=N
         # Get the final result
         transformed_tensor = sampler.x_t  # or however final tensor is stored
         return transformed_tensor
+
+def denormalize(x): return (x * 0.5 + 0.5).clamp(0, 1)
 
 # Main Function
 def main(args):
@@ -153,9 +155,6 @@ def main(args):
 
     transform_output = transforms.ToPILImage()
 
-    def denormalize(x):
-        return (x * 0.5 + 0.5).clamp(0, 1)
-
     # Process each image
     input_paths = sorted([os.path.join(args.input_dir, fname) for fname in os.listdir(args.input_dir)
                           if fname.lower().endswith(('.png', '.jpg', '.jpeg'))])
@@ -173,7 +172,7 @@ def main(args):
             image_tensor = transform_input(image_pil).unsqueeze(0).to(device)  # Add batch dim
 
             # Transform image
-            transformed_tensor = transform_image_with_euler(rectified_flow, image_tensor, args.num_steps,x_cond=image_tensor)
+            transformed_tensor = transform_image_with_euler(rectified_flow, image_tensor, args.num_steps)
 
             # Denormalize and save
             transformed_tensor = denormalize(transformed_tensor.squeeze(0).cpu())
@@ -191,7 +190,6 @@ def main(args):
 
     progress_bar.close()
     print("[INFO] Transformation complete.")
-    
 
 if __name__ == "__main__":
     args = parse_args()

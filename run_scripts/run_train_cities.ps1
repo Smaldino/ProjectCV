@@ -26,8 +26,6 @@ python .\scripts\train_cities.py `
   --mixed_precision "bf16" `
   --random_flip `
   --allow_tf32 `
-  --checkpointing_steps 2000 `
-  --checkpoints_total_limit 5
-
-
-  # tensorboard --logdir=./output/logs
+  --checkpointing_steps 500 `
+  --checkpoints_total_limit 5 `
+  --resume_from_checkpoint "training_2"
